@@ -1,257 +1,129 @@
-"""
-SmartDesk Cloud Synchronization
-
-Provides the cloud-sync interface for SmartDesk.
-
-The local project remains usable when offline.
-A cloud provider can later be connected to these methods.
-"""
-
+from pathlib import Path
 import hashlib
 import json
+import os
 import shutil
-from datetime import datetime
-from pathlib import Path
+import time
 
-from config import DATA_DIR, PROJECTS_DIR
-
-
-SYNC_FOLDER = DATA_DIR / "cloud"
+import config
 
 
-def initialize_cloud_storage():
-    """Create the local cloud-sync storage."""
+def _candidate_cloud_dirs():
+    candidates = []
 
-    SYNC_FOLDER.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    env = os.environ.get("SMARTDESK_CLOUD_DIR")
+    if env:
+        candidates.append(Path(env).expanduser())
+
+    for env_name in ("OneDrive", "OneDriveCommercial", "Dropbox", "GOOGLE_DRIVE"):
+        value = os.environ.get(env_name)
+        if value:
+            candidates.append(Path(value).expanduser())
+
+    home = Path.home()
+    candidates += [
+        home / "OneDrive",
+        home / "Dropbox",
+        home / "Google Drive",
+        home / "GoogleDrive",
+    ]
+
+    return candidates
+
+
+def get_cloud_directory():
+    """Use a real locally-synced cloud folder when available.
+
+    If none is installed, fall back to data/cloud so SmartDesk still works.
+    """
+    for candidate in _candidate_cloud_dirs():
+        if candidate.exists() and candidate.is_dir():
+            folder = candidate / "SmartDesk"
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder
+
+    fallback = Path(config.DATA_DIR) / "cloud"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 
 def get_file_hash(file_path):
-    """Return a SHA-256 hash for a file."""
-
-    file_path = Path(file_path)
-
-    if not file_path.exists():
-        return None
-
-    sha256 = hashlib.sha256()
-
-    with open(file_path, "rb") as file:
-        while True:
-            chunk = file.read(1024 * 1024)
-
-            if not chunk:
-                break
-
-            sha256.update(chunk)
-
-    return sha256.hexdigest()
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
-def create_sync_manifest():
-    """
-    Create a manifest describing local project files.
-    """
+def save_to_cloud(file_path, relative_path=None):
+    source = Path(file_path)
+    if not source.exists() or not source.is_file():
+        return False
 
-    initialize_cloud_storage()
+    cloud = get_cloud_directory()
+    if relative_path is None:
+        relative_path = source.name
+
+    destination = cloud / Path(relative_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    return True
+
+
+def sync_project(project_path):
+    project = Path(project_path)
+    if not project.exists():
+        return 0
+
+    cloud = get_cloud_directory()
+    count = 0
+
+    if project.is_file():
+        relative = project.name
+        return 1 if save_to_cloud(project, relative) else 0
+
+    # Keep project folder structure intact.
+    for file in project.rglob("*"):
+        if not file.is_file():
+            continue
+        try:
+            relative = file.relative_to(project.parent)
+        except ValueError:
+            relative = Path(project.name) / file.name
+        if save_to_cloud(file, relative):
+            count += 1
 
     manifest = {
-        "created_at": datetime.now().isoformat(),
-        "files": []
+        "project": str(project),
+        "synced_at": time.time(),
+        "files": count,
     }
-
-    if PROJECTS_DIR.exists():
-
-        for file_path in PROJECTS_DIR.rglob("*"):
-
-            if not file_path.is_file():
-                continue
-
-            relative_path = file_path.relative_to(
-                PROJECTS_DIR
-            )
-
-            manifest["files"].append({
-                "path": str(relative_path),
-                "size": file_path.stat().st_size,
-                "hash": get_file_hash(file_path),
-                "modified": datetime.fromtimestamp(
-                    file_path.stat().st_mtime
-                ).isoformat()
-            })
-
-    manifest_path = SYNC_FOLDER / "manifest.json"
-
-    manifest_path.write_text(
-        json.dumps(
-            manifest,
-            indent=4
-        ),
-        encoding="utf-8"
-    )
-
-    return manifest
+    manifest_path = cloud / project.name / ".smartdesk_sync.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return count
 
 
-def save_to_cloud(file_path):
-    """
-    Save a local project file to SmartDesk's
-    sync storage.
+def sync_all_projects():
+    projects_dir = Path(config.PROJECTS_DIR)
+    if not projects_dir.exists():
+        return 0
 
-    This acts as the local cloud adapter until
-    a real provider is connected.
-    """
-
-    initialize_cloud_storage()
-
-    file_path = Path(file_path)
-
-    if not file_path.exists():
-        return False
-
-    try:
-        relative_path = file_path.relative_to(
-            PROJECTS_DIR
-        )
-
-        destination = (
-            SYNC_FOLDER /
-            "projects" /
-            relative_path
-        )
-
-        destination.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        shutil.copy2(
-            file_path,
-            destination
-        )
-
-        create_sync_manifest()
-
-        return True
-
-    except ValueError:
-        return False
-
-    except Exception:
-        return False
-
-
-def download_from_cloud(relative_path):
-    """
-    Restore a project file from sync storage.
-    """
-
-    initialize_cloud_storage()
-
-    relative_path = Path(relative_path)
-
-    source = (
-        SYNC_FOLDER /
-        "projects" /
-        relative_path
-    )
-
-    destination = (
-        PROJECTS_DIR /
-        relative_path
-    )
-
-    if not source.exists():
-        return False
-
-    try:
-        destination.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        shutil.copy2(
-            source,
-            destination
-        )
-
-        return True
-
-    except Exception:
-        return False
-
-
-def sync_project():
-    """
-    Synchronize all project files.
-
-    Returns a summary of the operation.
-    """
-
-    initialize_cloud_storage()
-
-    uploaded = 0
-    failed = 0
-
-    if PROJECTS_DIR.exists():
-
-        for file_path in PROJECTS_DIR.rglob("*"):
-
-            if not file_path.is_file():
-                continue
-
-            if save_to_cloud(file_path):
-                uploaded += 1
-            else:
-                failed += 1
-
-    manifest = create_sync_manifest()
-
-    return {
-        "success": failed == 0,
-        "uploaded": uploaded,
-        "failed": failed,
-        "files": len(manifest["files"]),
-        "synced_at": datetime.now().isoformat()
-    }
+    total = 0
+    for item in projects_dir.iterdir():
+        total += sync_project(item)
+    return total
 
 
 def get_sync_status():
-    """Return the current synchronization status."""
-
-    initialize_cloud_storage()
-
-    manifest_path = SYNC_FOLDER / "manifest.json"
-
-    if not manifest_path.exists():
-        return {
-            "synced": False,
-            "files": 0,
-            "last_sync": None
-        }
-
-    try:
-        manifest = json.loads(
-            manifest_path.read_text(
-                encoding="utf-8"
-            )
-        )
-
-        return {
-            "synced": True,
-            "files": len(
-                manifest.get("files", [])
-            ),
-            "last_sync": manifest.get(
-                "created_at"
-            )
-        }
-
-    except Exception:
-        return {
-            "synced": False,
-            "files": 0,
-            "last_sync": None
-        }
+    cloud = get_cloud_directory()
+    is_fallback = cloud == Path(config.DATA_DIR) / "cloud"
+    return {
+        "directory": str(cloud),
+        "real_cloud_provider_detected": not is_fallback,
+        "message": (
+            "A locally-synced cloud folder is active."
+            if not is_fallback
+            else "No OneDrive/Dropbox/Google Drive folder detected; using SmartDesk local cloud cache."
+        ),
+    }

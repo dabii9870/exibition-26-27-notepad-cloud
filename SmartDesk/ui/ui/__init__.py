@@ -1,1 +1,0 @@
-"""SmartDesk UI package."""
