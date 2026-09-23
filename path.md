@@ -10,7 +10,7 @@ SmartDesk/
 │   ├── loading.py
 │   ├── home.py
 │   ├── editor.py
-│   ├── file_manager.py
+│   ├── file\_manager.py
 │   ├── study.py
 │   ├── focus.py
 │   ├── tools.py
@@ -19,8 +19,8 @@ SmartDesk/
 │   └── settings.py
 │
 ├── core/
-│   ├── python_runner.py
-│   ├── cloud_sync.py
+│   ├── python\_runner.py
+│   ├── cloud\_sync.py
 │   ├── backup.py
 │   └── security.py
 │
@@ -28,5 +28,6 @@ SmartDesk/
 │   └── smartdesk.db
 │
 └── assets/
-    ├── logo.png
-    └── icon.png
+├── logo.png
+└── icon.png
+
