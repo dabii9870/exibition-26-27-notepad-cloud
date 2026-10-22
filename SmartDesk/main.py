@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import messagebox
 from pathlib import Path
@@ -305,7 +306,7 @@ class SmartDesk(tk.Tk):
         elif page == "statistics":
             screen = StatisticsScreen(self.content)
         elif page == "vault":
-            screen = VaultScreen(self.content)
+            screen = VaultScreen(self.content, on_open_file=self.open_vault_file)
         elif page == "settings":
             screen = SettingsScreen(self.content, on_theme_change=self.change_theme)
         elif page == "admin" and is_admin(self.current_user):
@@ -368,6 +369,24 @@ class SmartDesk(tk.Tk):
                 "SmartDesk",
                 f"File or project could not be found:\n\n{path}",
             )
+
+    def open_vault_file(self, path):
+        path = Path(path)
+        if not path.is_file():
+            messagebox.showwarning(
+                "Vault",
+                f"File could not be found:\n\n{path}",
+            )
+            return
+
+        if path.suffix.lower() == ".txt":
+            self.navigate("editor", file_path=str(path))
+            return
+
+        try:
+            os.startfile(str(path))
+        except OSError as error:
+            messagebox.showerror("Vault", f"Could not open the file:\n\n{error}")
 
     def close_editor(self):
         self.navigate("home")

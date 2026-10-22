@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 from pathlib import Path
 
+import database
 from config import VAULT_DIR
 from core.security import generate_password_hash, verify_password
 
@@ -16,10 +17,11 @@ from core.security import generate_password_hash, verify_password
 class VaultScreen(tk.Frame):
     """Private vault interface."""
 
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, on_open_file=None, **kwargs):
         super().__init__(master, bg="#0B1020", **kwargs)
         self.unlocked = False
-        self.password_hash = None
+        self.password_hash = database.get_setting("vault_password_hash")
+        self.on_open_file = on_open_file
         self._build()
 
     def _build(self):
@@ -54,12 +56,15 @@ class VaultScreen(tk.Frame):
         buttons = tk.Frame(card, bg="#111827")
         buttons.pack(fill="x", pady=10)
 
-        tk.Button(
+        self.set_password_button = tk.Button(
             buttons, text="Set Password",
             command=self.set_password,
             bg="#7C3AED", fg="white", relief="flat",
             cursor="hand2", padx=15, pady=8
-        ).pack(side="left", padx=(0, 6))
+        )
+        self.set_password_button.pack(side="left", padx=(0, 6))
+        if self.password_hash:
+            self.set_password_button.config(state="disabled")
 
         tk.Button(
             buttons, text="Unlock",
@@ -78,13 +83,25 @@ class VaultScreen(tk.Frame):
         ).pack(pady=30)
 
     def set_password(self):
+        if self.password_hash:
+            messagebox.showinfo("Vault", "A vault password has already been set and cannot be changed.")
+            return
+
         password = self.password.get()
 
         if len(password) < 4:
             messagebox.showwarning("Vault", "Password must be at least 4 characters.")
             return
 
-        self.password_hash = generate_password_hash(password)
+        password_hash = generate_password_hash(password)
+        try:
+            database.set_setting("vault_password_hash", password_hash)
+        except Exception as error:
+            messagebox.showerror("Vault", f"Could not save the vault password:\n\n{error}")
+            return
+
+        self.password_hash = password_hash
+        self.set_password_button.config(state="disabled")
         self.unlocked = True
         self._show_unlocked()
 
@@ -123,6 +140,46 @@ class VaultScreen(tk.Frame):
             fg="#94A3B8", bg="#111827"
         ).pack(anchor="w", pady=15)
 
+        tk.Label(
+            self.content,
+            text="Saved files",
+            font=("Segoe UI", 12, "bold"),
+            fg="white", bg="#111827"
+        ).pack(anchor="w", pady=(0, 8))
+
+        files = sorted(
+            (path for path in VAULT_DIR.iterdir() if path.is_file()),
+            key=lambda path: path.name.casefold(),
+        )
+        if not files:
+            tk.Label(
+                self.content,
+                text="No files in the vault yet.",
+                fg="#64748B", bg="#111827"
+            ).pack(anchor="w")
+
+        for path in files:
+            row = tk.Frame(self.content, bg="#1E293B", padx=10, pady=6)
+            row.pack(fill="x", pady=3)
+            tk.Label(
+                row,
+                text=path.name,
+                fg="#CBD5E1", bg="#1E293B",
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True)
+            tk.Button(
+                row,
+                text="Open",
+                command=lambda file_path=path: self.open_file(file_path),
+                bg="#2563EB", fg="white", relief="flat",
+                cursor="hand2", padx=12, pady=5,
+            ).pack(side="right")
+
+    def open_file(self, path):
+        if not self.unlocked or self.on_open_file is None:
+            return
+        self.on_open_file(path)
+
     def add_file(self):
         if not self.unlocked:
             return
@@ -139,5 +196,6 @@ class VaultScreen(tk.Frame):
             destination = VAULT_DIR / source_path.name
             destination.write_bytes(source_path.read_bytes())
             messagebox.showinfo("Vault", "File added to the vault.")
+            self._show_unlocked()
         except Exception as error:
             messagebox.showerror("Vault", str(error))
