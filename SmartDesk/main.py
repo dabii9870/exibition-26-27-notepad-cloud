@@ -16,7 +16,8 @@ from core.admin_bootstrap import ensure_admin_account, is_admin
 from ui.login import LoginScreen
 from ui.loading import LoadingScreen
 from ui.home import HomeScreen
-from ui.editor import EditorScreen
+from ui.text_editor import TextEditorScreen
+from ui.bored import BoredScreen
 from ui.file_manager import FileManagerScreen
 from ui.study import StudyScreen
 from ui.focus import FocusScreen
@@ -166,6 +167,7 @@ class SmartDesk(tk.Tk):
             ("📂  Files", "files"),
             ("📚  Study", "study"),
             ("⏱️  Focus", "focus"),
+            ("🎲  Bored", "bored"),
             ("🔎  Search & Tools", "tools"),
             ("📊  Statistics", "statistics"),
             ("🔐  Private Vault", "vault"),
@@ -261,10 +263,11 @@ class SmartDesk(tk.Tk):
 
         titles = {
             "home": "Home",
-            "editor": "Editor",
+            "editor": "Text Editor",
             "files": "File Manager",
             "study": "Study Center",
             "focus": "Focus Timer",
+            "bored": "Bored",
             "tools": "Search & Tools",
             "statistics": "Statistics",
             "vault": "Private Vault",
@@ -274,11 +277,16 @@ class SmartDesk(tk.Tk):
         self.page_title.config(text=titles.get(page, "SmartDesk"))
 
         if page == "home":
-            screen = HomeScreen(self.content, on_open=self.handle_home_open)
+            screen = HomeScreen(
+                self.content,
+                on_open=self.handle_home_open,
+                on_new_project=lambda: self.navigate("editor"),
+            )
         elif page == "editor":
-            screen = EditorScreen(
+            screen = TextEditorScreen(
                 self.content,
                 file_path=kwargs.get("file_path"),
+                project_id=kwargs.get("project_id"),
                 on_close=self.close_editor,
             )
         elif page == "files":
@@ -287,6 +295,11 @@ class SmartDesk(tk.Tk):
             screen = StudyScreen(self.content)
         elif page == "focus":
             screen = FocusScreen(self.content)
+        elif page == "bored":
+            screen = BoredScreen(
+                self.content,
+                on_exit=self.return_home_from_bored,
+            )
         elif page == "tools":
             screen = ToolsScreen(self.content)
         elif page == "statistics":
@@ -321,14 +334,35 @@ class SmartDesk(tk.Tk):
             path = project["path"]
         except (TypeError, KeyError, IndexError):
             return
+        if str(path).startswith("smartdesk://project/"):
+            if project["language"] not in ("text", "txt", ""):
+                messagebox.showwarning(
+                    "Text Editor",
+                    "Only text projects and .txt files can be opened.",
+                )
+                return
+            self.navigate("editor", project_id=project["id"])
+            return
         self.open_path(path)
 
     def open_path(self, path):
+        if str(path).startswith("smartdesk://project/"):
+            project = database.get_project_by_path(str(path))
+            if project:
+                self.handle_project_open(project)
+            return
+
         path = Path(path)
         if path.is_dir():
             self.navigate("files")
         elif path.is_file():
-            self.navigate("editor", file_path=str(path))
+            if path.suffix.lower() == ".txt":
+                self.navigate("editor", file_path=str(path))
+            else:
+                messagebox.showwarning(
+                    "Text Editor",
+                    "Only .txt files can be opened in the text editor.",
+                )
         else:
             messagebox.showwarning(
                 "SmartDesk",
@@ -336,6 +370,9 @@ class SmartDesk(tk.Tk):
             )
 
     def close_editor(self):
+        self.navigate("home")
+
+    def return_home_from_bored(self):
         self.navigate("home")
 
     def change_theme(self, theme):

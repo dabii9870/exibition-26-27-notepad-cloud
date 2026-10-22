@@ -9,7 +9,7 @@ from pathlib import Path
 from config import PROJECTS_DIR
 from database import (
     save_project, get_projects, set_project_pinned,
-    add_recent_file
+    add_recent_file, delete_project, delete_recent_file
 )
 
 
@@ -29,6 +29,7 @@ class FileManagerScreen(tk.Frame):
         buttons = [
             ("New Project", self.new_project),
             ("Add Existing", self.add_existing),
+            ("Delete", self.delete_selected),
             ("Refresh", self.refresh),
         ]
 
@@ -76,16 +77,20 @@ class FileManagerScreen(tk.Frame):
 
     def add_existing(self):
         path = filedialog.askopenfilename(
-            title="Choose a file"
+            title="Choose a text file",
+            filetypes=(("Text files", "*.txt"),),
         )
         if not path:
             return
 
         file_path = Path(path)
+        if file_path.suffix.lower() != ".txt":
+            messagebox.showerror("File Manager", "Only .txt files can be added.")
+            return
         save_project(
             file_path.stem,
             str(file_path),
-            file_path.suffix.lstrip(".") or "text",
+            "text",
             False
         )
         add_recent_file(str(file_path))
@@ -100,6 +105,44 @@ class FileManagerScreen(tk.Frame):
 
         if self.on_open:
             self.on_open(project)
+
+    def delete_selected(self):
+        selection = self.listbox.curselection()
+        if not selection:
+            messagebox.showwarning(
+                "Delete",
+                "Select a file or project to delete.",
+            )
+            return
+
+        project = self.projects[selection[0]]
+        path = str(project["path"] or "")
+        internal_project = path.startswith("smartdesk://project/")
+        target = Path(path) if path and not internal_project else None
+
+        if internal_project:
+            details = "This permanently deletes the SmartDesk project and its saved text."
+        elif target and target.is_file():
+            details = f"This permanently deletes the file:\n\n{target}"
+        elif target and target.is_dir():
+            details = (
+                f"This removes the folder project from SmartDesk, but leaves all files in it untouched:\n\n{target}"
+            )
+        else:
+            details = "This removes the missing file's project record from SmartDesk."
+
+        if not messagebox.askyesno("Confirm Delete", details):
+            return
+
+        try:
+            if target and target.is_file():
+                target.unlink()
+            delete_project(project["id"])
+            if path and not internal_project:
+                delete_recent_file(path)
+            self.refresh()
+        except Exception as error:
+            messagebox.showerror("Delete Error", str(error))
 
     def toggle_pin(self):
         selection = self.listbox.curselection()

@@ -263,6 +263,7 @@ def initialize_database():
         # Repair older SmartDesk databases.
         repair_users_table(conn)
         repair_projects_table(conn)
+        repair_settings_table(conn)
 
         safe_commit(conn)
 
@@ -426,6 +427,40 @@ def repair_projects_table(conn):
     """, (
         now,
     ))
+
+
+def repair_settings_table(conn):
+
+    if not table_exists(conn, "settings"):
+        return
+
+    columns = get_columns(conn, "settings")
+
+    if "key" not in columns:
+        conn.execute("ALTER TABLE settings ADD COLUMN key TEXT")
+
+    if "value" not in columns:
+        conn.execute("ALTER TABLE settings ADD COLUMN value TEXT")
+
+    if "setting_name" in columns:
+        conn.execute("""
+            UPDATE settings
+            SET key = setting_name
+            WHERE key IS NULL OR key = ''
+        """)
+
+    if "setting_value" in columns:
+        conn.execute("""
+            UPDATE settings
+            SET value = setting_value
+            WHERE value IS NULL
+        """)
+
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS settings_key_unique
+        ON settings(key)
+        WHERE key IS NOT NULL
+    """)
 
 
 # ============================================================
@@ -764,6 +799,21 @@ def add_recent_file(
 
     finally:
 
+        close_connection(conn)
+
+
+def delete_recent_file(path):
+
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            "DELETE FROM recent_files WHERE path = ?",
+            (str(path),)
+        )
+        safe_commit(conn)
+
+    finally:
         close_connection(conn)
 
 
