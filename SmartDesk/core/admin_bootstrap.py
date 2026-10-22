@@ -2,205 +2,182 @@ import sqlite3
 from datetime import datetime
 
 import config
-from core.security import generate_password_hash
+from core.security import (
+    hash_password,
+    verify_password,
+)
 
+
+# ============================================================
+# SMARTDESK ADMIN ACCOUNT
+# ============================================================
 
 ADMIN_USERNAME = "davereub"
 ADMIN_PASSWORD = "98709870!@"
 
 
-def get_database_connection():
-    """Open the SmartDesk database."""
-    return sqlite3.connect(config.DATABASE_PATH)
+# ============================================================
+# DATABASE CONNECTION
+# ============================================================
 
-
-def ensure_users_table(connection):
-    """
-    Make sure the users table has all fields required by SmartDesk.
-
-    This also handles older SmartDesk databases that were created
-    before the admin system was added.
-    """
-
-    cursor = connection.cursor()
-
-    # Create the table if it doesn't exist.
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            verified INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-        """
+def get_connection():
+    connection = sqlite3.connect(
+        str(config.DB_PATH),
+        timeout=20
     )
 
-    connection.commit()
+    connection.row_factory = sqlite3.Row
 
-    # ---------------------------------------------------------
-    # Check existing columns
-    # ---------------------------------------------------------
+    return connection
 
-    cursor.execute("PRAGMA table_info(users)")
-    columns = cursor.fetchall()
 
-    column_names = {
-        column[1]
-        for column in columns
-    }
+# ============================================================
+# USERS TABLE
+# ============================================================
 
-    # ---------------------------------------------------------
-    # Add missing role column
-    # ---------------------------------------------------------
-
-    if "role" not in column_names:
-        cursor.execute(
-            """
-            ALTER TABLE users
-            ADD COLUMN role TEXT NOT NULL DEFAULT 'user'
-            """
-        )
-
-    # ---------------------------------------------------------
-    # Add missing verified column
-    # ---------------------------------------------------------
-
-    if "verified" not in column_names:
-        cursor.execute(
-            """
-            ALTER TABLE users
-            ADD COLUMN verified INTEGER NOT NULL DEFAULT 0
-            """
-        )
-
-    # ---------------------------------------------------------
-    # Add missing created_at column
-    # ---------------------------------------------------------
-
-    if "created_at" not in column_names:
-        now = datetime.now().isoformat()
-
-        cursor.execute(
-            """
-            ALTER TABLE users
-            ADD COLUMN created_at TEXT NOT NULL DEFAULT ?
-            """,
-            (now,)
-        )
-
-    connection.commit()
-
-    # ---------------------------------------------------------
-    # Repair existing NULL values
-    # ---------------------------------------------------------
-
-    now = datetime.now().isoformat()
+def ensure_users_table():
+    connection = get_connection()
 
     try:
-        cursor.execute(
-            """
-            UPDATE users
-            SET created_at = ?
-            WHERE created_at IS NULL
-            """,
-            (now,)
-        )
-    except sqlite3.OperationalError:
-        pass
-
-    connection.commit()
-
-
-def create_admin_account():
-    """
-    Create or repair the default SmartDesk administrator.
-
-    Username:
-        davereub
-
-    Password:
-        98709870!@
-
-    The account is automatically marked as:
-        role = admin
-        verified = 1
-    """
-
-    connection = get_database_connection()
-
-    try:
-        ensure_users_table(connection)
-
         cursor = connection.cursor()
 
-        # -----------------------------------------------------
-        # Check if admin already exists
-        # -----------------------------------------------------
-
         cursor.execute(
             """
-            SELECT id
-            FROM users
-            WHERE username = ?
-            """,
-            (ADMIN_USERNAME,)
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT DEFAULT 'user',
+                verified INTEGER DEFAULT 0,
+                created_at TEXT
+            )
+            """
         )
 
-        existing_user = cursor.fetchone()
+        connection.commit()
 
-        # -----------------------------------------------------
-        # Existing admin
-        # -----------------------------------------------------
+        # ----------------------------------------------------
+        # Check existing columns
+        # ----------------------------------------------------
 
-        if existing_user:
+        cursor.execute(
+            "PRAGMA table_info(users)"
+        )
+
+        columns = {
+            row["name"]
+            for row in cursor.fetchall()
+        }
+
+        # Older SmartDesk database migration
+        if "role" not in columns:
+            cursor.execute(
+                """
+                ALTER TABLE users
+                ADD COLUMN role TEXT DEFAULT 'user'
+                """
+            )
+
+        if "verified" not in columns:
+            cursor.execute(
+                """
+                ALTER TABLE users
+                ADD COLUMN verified INTEGER DEFAULT 0
+                """
+            )
+
+        if "created_at" not in columns:
+            cursor.execute(
+                """
+                ALTER TABLE users
+                ADD COLUMN created_at TEXT
+                """
+            )
+
+            now = datetime.now().isoformat()
 
             cursor.execute(
                 """
                 UPDATE users
-                SET role = ?,
-                    verified = 1
-                WHERE username = ?
+                SET created_at = ?
+                WHERE created_at IS NULL
                 """,
-                (
-                    "admin",
-                    ADMIN_USERNAME
-                )
+                (now,)
             )
 
-            # Repair missing created_at if necessary.
-            now = datetime.now().isoformat()
+        connection.commit()
 
-            try:
-                cursor.execute(
-                    """
-                    UPDATE users
-                    SET created_at = ?
-                    WHERE username = ?
-                    AND (created_at IS NULL OR created_at = '')
-                    """,
-                    (
-                        now,
-                        ADMIN_USERNAME
-                    )
-                )
-            except sqlite3.OperationalError:
-                pass
+    finally:
+        connection.close()
 
-        # -----------------------------------------------------
-        # Create admin
-        # -----------------------------------------------------
 
-        else:
+# ============================================================
+# CREATE / REPAIR ADMIN
+# ============================================================
 
-            password_hash = generate_password_hash(
-                ADMIN_PASSWORD
-            )
+def ensure_admin_account(
+    password=None,
+    username=None
+):
+    """
+    Create or repair the SmartDesk administrator.
 
-            created_at = datetime.now().isoformat()
+    This accepts the older call pattern `ensure_admin_account(database)` from
+    legacy startup code and still guarantees the required admin account exists
+    and is verified.
+    """
 
+    ensure_users_table()
+
+    if username is None:
+        username = ADMIN_USERNAME
+
+    # Backward compatibility: older code may pass the database module as the
+    # first positional argument instead of a password string.
+    if password is not None and not isinstance(password, str):
+        password = ADMIN_PASSWORD
+
+    if password is None:
+        password = ADMIN_PASSWORD
+
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        # Force a single verified admin account: only davereub may be admin.
+        cursor.execute(
+            """
+            UPDATE users
+            SET role = 'user', verified = 0
+            WHERE username != ? AND role = 'admin'
+            """,
+            (username,)
+        )
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                username,
+                password_hash,
+                role,
+                verified
+            FROM users
+            WHERE username = ?
+            """,
+            (username,)
+        )
+
+        user = cursor.fetchone()
+
+        password_hash = hash_password(password)
+
+        # ----------------------------------------------------
+        # ADMIN DOES NOT EXIST
+        # ----------------------------------------------------
+
+        if user is None:
             cursor.execute(
                 """
                 INSERT INTO users (
@@ -213,20 +190,202 @@ def create_admin_account():
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
-                    ADMIN_USERNAME,
+                    username,
                     password_hash,
                     "admin",
                     1,
-                    created_at
+                    datetime.now().isoformat()
                 )
             )
 
+            connection.commit()
+            return True
+
+        # ----------------------------------------------------
+        # ADMIN EXISTS
+        # ----------------------------------------------------
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET
+                password_hash = ?,
+                role = 'admin',
+                verified = 1,
+                created_at = COALESCE(created_at, ?)
+            WHERE username = ?
+            """,
+            (
+                password_hash,
+                datetime.now().isoformat(),
+                username,
+            )
+        )
+
         connection.commit()
+        return True
+
+    except Exception:
+        connection.rollback()
+        raise
 
     finally:
         connection.close()
 
 
+# ============================================================
+# COMPATIBILITY ALIASES
+# ============================================================
+
+def create_admin_account(
+    password=None,
+    username=None
+):
+    return ensure_admin_account(
+        password,
+        username
+    )
+
+
+# ============================================================
+# ADMIN CHECK
+# ============================================================
+
+def is_admin(username):
+    if username is None:
+        return False
+
+    if hasattr(username, "keys"):
+        try:
+            username = username["username"]
+        except Exception:
+            username = None
+    elif hasattr(username, "__getitem__") and not isinstance(username, str):
+        try:
+            username = username["username"]
+        except Exception:
+            try:
+                username = username[1]
+            except Exception:
+                username = None
+
+    if not username:
+        return False
+
+    ensure_users_table()
+
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT role
+            FROM users
+            WHERE username = ?
+            """,
+            (username,)
+        )
+
+        user = cursor.fetchone()
+
+        if user is None:
+            return False
+
+        return user["role"] == "admin"
+
+    finally:
+        connection.close()
+
+
+# ============================================================
+# VERIFIED CHECK
+# ============================================================
+
+def is_verified(username):
+    if username is None:
+        return False
+
+    if hasattr(username, "keys"):
+        try:
+            username = username["username"]
+        except Exception:
+            username = None
+    elif hasattr(username, "__getitem__") and not isinstance(username, str):
+        try:
+            username = username["username"]
+        except Exception:
+            try:
+                username = username[1]
+            except Exception:
+                username = None
+
+    if not username:
+        return False
+
+    ensure_users_table()
+
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT verified
+            FROM users
+            WHERE username = ?
+            """,
+            (username,)
+        )
+
+        user = cursor.fetchone()
+
+        if user is None:
+            return False
+
+        return bool(user["verified"])
+
+    finally:
+        connection.close()
+
+
+# ============================================================
+# ADMIN DETAILS
+# ============================================================
+
+def get_admin_username():
+    return ADMIN_USERNAME
+
+
+def get_admin_password():
+    return ADMIN_PASSWORD
+
+
+# ============================================================
+# QUICK TEST
+# ============================================================
+
 if __name__ == "__main__":
-    create_admin_account()
-    print("SmartDesk admin account is ready.")
+
+    print("SmartDesk admin bootstrap test")
+
+    ensure_admin_account()
+
+    print(
+        "Admin account:",
+        ADMIN_USERNAME
+    )
+
+    print(
+        "Admin status:",
+        is_admin(ADMIN_USERNAME)
+    )
+
+    print(
+        "Verified:",
+        is_verified(ADMIN_USERNAME)
+    )
+
+    print("Test complete.")

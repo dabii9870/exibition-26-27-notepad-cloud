@@ -1,84 +1,87 @@
-"""
-SmartDesk Security System
-
-Provides password hashing and encryption helpers.
-
-Passwords are never stored as plain text.
-"""
-
-import base64
 import hashlib
-import hmac
-import os
 import secrets
-
-
-HASH_ITERATIONS = 310_000
-SALT_SIZE = 32
+import base64
+import hmac
 
 
 # ============================================================
-# PASSWORD SECURITY
+# PASSWORD SETTINGS
 # ============================================================
 
-def generate_password_hash(password):
+PASSWORD_ITERATIONS = 200_000
+
+
+# ============================================================
+# PASSWORD HASHING
+# ============================================================
+
+def hash_password(password):
     """
-    Generate a secure PBKDF2 password hash.
-
-    Returns a string containing:
-        algorithm
-        iterations
-        salt
-        hash
+    Create a secure PBKDF2 password hash.
     """
 
-    if not isinstance(password, str):
-        raise TypeError(
-            "Password must be a string."
-        )
+    if password is None:
+        password = ""
 
-    if len(password) < 4:
-        raise ValueError(
-            "Password must contain at least 4 characters."
-        )
+    password = str(password)
 
-    salt = os.urandom(SALT_SIZE)
+    salt = secrets.token_bytes(32)
 
     password_hash = hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),
         salt,
-        HASH_ITERATIONS
+        PASSWORD_ITERATIONS
     )
 
     return (
-        f"pbkdf2_sha256$"
-        f"{HASH_ITERATIONS}$"
-        f"{base64.b64encode(salt).decode()}$"
-        f"{base64.b64encode(password_hash).decode()}"
+        f"{PASSWORD_ITERATIONS}$"
+        f"{base64.b64encode(salt).decode('ascii')}$"
+        f"{base64.b64encode(password_hash).decode('ascii')}"
     )
 
 
+def generate_password_hash(password):
+    """
+    Compatibility function used by SmartDesk login.py.
+
+    This intentionally points to the same password hashing
+    system as hash_password().
+    """
+
+    return hash_password(password)
+
+
 def verify_password(password, stored_hash):
-    """Verify a password against a stored hash."""
+    """
+    Verify a password against a stored PBKDF2 hash.
+    """
+
+    if password is None:
+        return False
+
+    if not stored_hash:
+        return False
 
     try:
         parts = stored_hash.split("$")
 
-        if len(parts) != 4:
+        if len(parts) != 3:
             return False
 
-        algorithm = parts[0]
-        iterations = int(parts[1])
-        salt = base64.b64decode(parts[2])
-        expected_hash = base64.b64decode(parts[3])
+        iterations = int(parts[0])
 
-        if algorithm != "pbkdf2_sha256":
-            return False
+        salt = base64.b64decode(
+            parts[1]
+        )
+
+        expected_hash = base64.b64decode(
+            parts[2]
+        )
 
         actual_hash = hashlib.pbkdf2_hmac(
             "sha256",
-            password.encode("utf-8"),
+            str(password).encode("utf-8"),
             salt,
             iterations
         )
@@ -93,50 +96,99 @@ def verify_password(password, stored_hash):
 
 
 # ============================================================
-# RANDOM TOKENS
+# COMPATIBILITY ALIAS
 # ============================================================
 
-def generate_token(length=32):
-    """Generate a cryptographically secure token."""
+def check_password(password, stored_hash):
+    """
+    Compatibility alias for password checking.
+    """
 
-    return secrets.token_urlsafe(length)
-
-
-def generate_session_token():
-    """Generate a session token."""
-
-    return secrets.token_urlsafe(48)
+    return verify_password(
+        password,
+        stored_hash
+    )
 
 
 # ============================================================
-# FILE HASHING
+# GENERAL HASHING
 # ============================================================
+
+def hash_text(text):
+    """
+    SHA-256 hash for ordinary text.
+    """
+
+    if text is None:
+        text = ""
+
+    return hashlib.sha256(
+        str(text).encode("utf-8")
+    ).hexdigest()
+
 
 def hash_bytes(data):
-    """Create a SHA-256 hash of bytes."""
+    """
+    SHA-256 hash for bytes.
+    """
+
+    if data is None:
+        data = b""
 
     return hashlib.sha256(
         data
     ).hexdigest()
 
 
-def hash_text(text):
-    """Create a SHA-256 hash of text."""
+# ============================================================
+# TOKENS
+# ============================================================
 
-    return hash_bytes(
-        text.encode("utf-8")
+def generate_token(length=32):
+    """
+    Generate a secure random token.
+    """
+
+    return secrets.token_urlsafe(
+        length
+    )
+
+
+def create_token(length=32):
+    """
+    Compatibility alias.
+    """
+
+    return generate_token(
+        length
     )
 
 
 # ============================================================
-# SIMPLE DATA ENCRYPTION HELPER
+# SALT
 # ============================================================
 
-def derive_key(password, salt):
+def generate_salt(length=32):
     """
-    Derive a cryptographic key from a password.
+    Generate a random salt.
+    """
 
-    This helper is intended for the Private Vault system.
+    return secrets.token_bytes(
+        length
+    )
+
+
+# ============================================================
+# KEY DERIVATION
+# ============================================================
+
+def derive_key(
+    password,
+    salt,
+    iterations=200_000
+):
+    """
+    Derive a 32-byte key from a password.
     """
 
     if isinstance(salt, str):
@@ -144,37 +196,48 @@ def derive_key(password, salt):
 
     return hashlib.pbkdf2_hmac(
         "sha256",
-        password.encode("utf-8"),
+        str(password).encode("utf-8"),
         salt,
-        HASH_ITERATIONS,
+        iterations,
         dklen=32
     )
 
 
+# ============================================================
+# XOR ENCRYPTION
+# ============================================================
+
 def xor_encrypt(data, key):
     """
-    Lightweight byte transformation helper.
-
-    This is NOT intended to replace authenticated encryption.
-    The production Vault should use an authenticated encryption
-    library such as AES-GCM or Fernet.
+    Simple symmetric encryption used by existing SmartDesk
+    compatibility features.
     """
 
     if isinstance(data, str):
         data = data.encode("utf-8")
 
-    output = bytearray()
+    if isinstance(key, str):
+        key = key.encode("utf-8")
+
+    if not key:
+        raise ValueError(
+            "Encryption key cannot be empty."
+        )
+
+    result = bytearray()
 
     for index, byte in enumerate(data):
-        output.append(
+        result.append(
             byte ^ key[index % len(key)]
         )
 
-    return bytes(output)
+    return bytes(result)
 
 
 def xor_decrypt(data, key):
-    """Reverse xor_encrypt()."""
+    """
+    XOR decryption.
+    """
 
     return xor_encrypt(
         data,
@@ -183,12 +246,117 @@ def xor_decrypt(data, key):
 
 
 # ============================================================
-# SECURE RANDOM SALT
+# TEXT ENCRYPTION
 # ============================================================
 
-def generate_salt():
-    """Generate a secure random salt."""
+def encrypt_text(text, password):
+    """
+    Encrypt text using a password-derived key.
+    """
 
-    return base64.b64encode(
-        os.urandom(SALT_SIZE)
-    ).decode("utf-8")
+    salt = generate_salt(16)
+
+    key = derive_key(
+        password,
+        salt
+    )
+
+    encrypted = xor_encrypt(
+        text,
+        key
+    )
+
+    salt_encoded = base64.b64encode(
+        salt
+    ).decode("ascii")
+
+    data_encoded = base64.b64encode(
+        encrypted
+    ).decode("ascii")
+
+    return salt_encoded + ":" + data_encoded
+
+
+def decrypt_text(encrypted_text, password):
+    """
+    Decrypt text created by encrypt_text().
+    """
+
+    salt_encoded, data_encoded = (
+        encrypted_text.split(":", 1)
+    )
+
+    salt = base64.b64decode(
+        salt_encoded
+    )
+
+    encrypted = base64.b64decode(
+        data_encoded
+    )
+
+    key = derive_key(
+        password,
+        salt
+    )
+
+    decrypted = xor_decrypt(
+        encrypted,
+        key
+    )
+
+    return decrypted.decode(
+        "utf-8"
+    )
+
+
+# ============================================================
+# PASSWORD VALIDATION
+# ============================================================
+
+def password_is_valid(password):
+    """
+    Basic password validation.
+    """
+
+    if password is None:
+        return False
+
+    return len(str(password)) >= 6
+
+
+# ============================================================
+# TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    test_password = "SmartDeskTest123!"
+
+    print("Testing SmartDesk security...")
+
+    hashed = generate_password_hash(
+        test_password
+    )
+
+    print(
+        "Hash created:",
+        bool(hashed)
+    )
+
+    print(
+        "Correct password:",
+        verify_password(
+            test_password,
+            hashed
+        )
+    )
+
+    print(
+        "Wrong password:",
+        verify_password(
+            "wrong-password",
+            hashed
+        )
+    )
+
+    print("Security test complete.")

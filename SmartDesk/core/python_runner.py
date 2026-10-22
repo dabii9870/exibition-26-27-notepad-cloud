@@ -11,6 +11,21 @@ from pathlib import Path
 DEFAULT_TIMEOUT = 30
 
 
+def validate_python_source(source, filename="<input>"):
+    """Compile Python source and return a structured syntax error result."""
+    try:
+        compile(source, filename, "exec")
+        return {"success": True, "error": None}
+    except SyntaxError as error:
+        return {
+            "success": False,
+            "error": f"Syntax error on line {error.lineno}: {error.msg}",
+            "line": error.lineno,
+        }
+    except Exception as error:
+        return {"success": False, "error": str(error), "line": None}
+
+
 def run_python_file(file_path, timeout=DEFAULT_TIMEOUT):
     """
     Run a Python file and return its output.
@@ -81,6 +96,15 @@ def run_python_code(code, timeout=DEFAULT_TIMEOUT):
     """
     Run Python code directly without creating a file.
     """
+
+    validation = validate_python_source(code)
+    if not validation["success"]:
+        return {
+            "success": False,
+            "output": "",
+            "error": validation["error"],
+            "return_code": 1,
+        }
 
     try:
         process = subprocess.run(

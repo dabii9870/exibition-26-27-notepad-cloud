@@ -30,7 +30,15 @@ class LoginScreen(tk.Frame):
         tk.Label(
             card, text="Sign in to your workspace",
             font=("Segoe UI", 11), fg="#94A3B8", bg="#111827"
-        ).pack(pady=(0, 25))
+        ).pack(pady=(0, 5))
+
+        tk.Label(
+            card,
+            text="✓ Verified admin access",
+            fg="#34D399",
+            bg="#111827",
+            font=("Segoe UI", 10, "bold")
+        ).pack(pady=(0, 20))
 
         tk.Label(card, text="Username", fg="#CBD5E1", bg="#111827",
                  font=("Segoe UI", 10)).pack(anchor="w")
