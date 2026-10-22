@@ -27,6 +27,7 @@ from ui.statistics import StatisticsScreen
 from ui.vault import VaultScreen
 from ui.settings import SettingsScreen
 from ui.admin import AdminScreen
+from ui.theme import apply_widget_theme
 
 
 class SmartDesk(tk.Tk):
@@ -43,11 +44,14 @@ class SmartDesk(tk.Tk):
         self.nav_buttons = {}
         self.icon_image = None
         self.logo_image = None
+        self.theme = config.DEFAULT_THEME
 
         try:
             config.create_directories()
             database.initialize_database()
             ensure_admin_account(database)
+            saved_theme = database.get_setting("theme", config.DEFAULT_THEME)
+            self.theme = saved_theme if saved_theme in config.THEMES else config.DEFAULT_THEME
             self.load_app_icon()
         except Exception as error:
             messagebox.showerror(
@@ -87,12 +91,14 @@ class SmartDesk(tk.Tk):
         self.clear_window()
         loading = LoadingScreen(self, on_complete=self.show_login)
         loading.pack(fill="both", expand=True)
+        apply_widget_theme(loading, self.theme)
         self.current_screen = loading
 
     def show_login(self):
         self.clear_window()
         login = LoginScreen(self, on_login=self.login_success)
         login.pack(fill="both", expand=True)
+        apply_widget_theme(login, self.theme)
         self.current_screen = login
 
     def login_success(self, user):
@@ -250,6 +256,7 @@ class SmartDesk(tk.Tk):
         self.content = tk.Frame(right_side, bg="#0B1020")
         self.content.pack(fill="both", expand=True)
 
+        apply_widget_theme(self, self.theme)
         self.navigate("home")
 
     def background_cloud_sync(self):
@@ -315,6 +322,7 @@ class SmartDesk(tk.Tk):
             screen = HomeScreen(self.content, on_open=self.handle_home_open)
 
         screen.pack(fill="both", expand=True)
+        apply_widget_theme(screen, self.theme)
         self.current_screen = screen
 
     def handle_home_open(self, item):
@@ -395,11 +403,8 @@ class SmartDesk(tk.Tk):
         self.navigate("home")
 
     def change_theme(self, theme):
-        try:
-            database.set_setting("theme", theme)
-        except Exception:
-            pass
-        self.build_workspace()
+        apply_widget_theme(self, theme, self.theme)
+        self.theme = theme
 
     def logout(self):
         if not messagebox.askyesno("Log Out", "Are you sure you want to log out?"):

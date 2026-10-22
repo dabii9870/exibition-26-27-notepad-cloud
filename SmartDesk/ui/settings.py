@@ -34,6 +34,8 @@ class SettingsScreen(tk.Frame):
         ).pack(anchor="w", pady=(0, 15))
 
         theme_value = get_setting("theme", DEFAULT_THEME)
+        if theme_value not in THEMES:
+            theme_value = DEFAULT_THEME
         self.theme = tk.StringVar(value=theme_value)
 
         tk.Label(
